@@ -60,9 +60,9 @@ COMPANY_SEARCHES = [
 # === GUEST API CONFIGURATION ===
 GUEST_API_BASE = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 GUEST_API_PAGE_SIZE = 25
-GUEST_API_MAX_START = 975  # start=975 is last page, start=1000 = 404
-GUEST_API_DELAY_MIN = 2.0
-GUEST_API_DELAY_MAX = 5.0
+GUEST_API_MAX_START = 100  # LinkedIn caps at ~40 jobs per keyword, 4 pages is enough
+GUEST_API_DELAY_MIN = 0.5
+GUEST_API_DELAY_MAX = 1.5
 
 # User-Agent rotation pool
 USER_AGENTS = [

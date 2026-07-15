@@ -1,5 +1,5 @@
 """
-mcp_client.py — MCP LinkedIn Client
+mcp_client.py — MCP LinkedIn Client (fixed initialization)
 Wraps mcp-server-linkedin for people, feed, company posts, employees.
 """
 from __future__ import annotations
@@ -32,8 +32,11 @@ class MCPClient:
             env={"UV_HTTP_TIMEOUT": "300"},
         )
         self._cm = stdio_client(server_params)
-        self._read_stream, self._write_stream = await self._cm.__aenter__()
+        streams = await self._cm.__aenter__()
+        self._read_stream = streams[0]
+        self._write_stream = streams[1]
 
+        # Initialize
         init = types.JSONRPCRequest(
             jsonrpc="2.0", id=1, method="initialize",
             params=types.InitializeRequestParams(
@@ -43,9 +46,10 @@ class MCPClient:
             ).model_dump(),
         )
         await self._write_stream.send(SessionMessage(message=init))
-        await self._read_stream.receive()
+        resp = await asyncio.wait_for(self._read_stream.receive(), timeout=15)
+        print("[MCP] Initialized OK")
 
-    async def call_raw(self, tool_name: str, arguments: dict) -> dict | None:
+    async def call_raw(self, tool_name: str, arguments: dict, timeout: float = 30) -> dict | None:
         import mcp.types as types
         from mcp.shared.message import SessionMessage
 
@@ -55,7 +59,7 @@ class MCPClient:
             params={"name": tool_name, "arguments": arguments},
         )
         await self._write_stream.send(SessionMessage(message=req))
-        response = await self._read_stream.receive()
+        response = await asyncio.wait_for(self._read_stream.receive(), timeout=timeout)
 
         inner = response
         while hasattr(inner, "message") and inner.message is not None:
@@ -232,9 +236,9 @@ async def scrape_mcp(
                     new += 1
                 elif not url:
                     results["people"].append(person)
-            print(f"    → {new} new profiles")
+            print(f"    -> {new} new profiles")
         else:
-            print("    → 0")
+            print("    -> 0")
         await asyncio.sleep(delay)
 
     # --- FEED ---
@@ -243,7 +247,7 @@ async def scrape_mcp(
     if data:
         posts = _parse_post_refs(data, "feed")
         results["posts_feed"] = posts
-        print(f"  → {len(posts)} posts")
+        print(f"  -> {len(posts)} posts")
 
     # --- COMPANY POSTS + EMPLOYEES ---
     print(f"\n[MCP] COMPANIES — {len(company_searches)} searches")
@@ -251,7 +255,7 @@ async def scrape_mcp(
         print(f"  [{i}/{len(company_searches)}] {ck}")
         cdata = await mcp.call_raw("search_companies", {"keywords": ck})
         if not cdata:
-            print("    → 0 companies")
+            print("    -> 0 companies")
             continue
 
         comp_refs = cdata.get("references", {}).get("search_results", [])
@@ -263,7 +267,7 @@ async def scrape_mcp(
                     slug = url.rstrip("/").split("/")[-1]
                     comp_slugs.append(slug)
 
-        print(f"    → {len(comp_slugs)} company slugs")
+        print(f"    -> {len(comp_slugs)} company slugs")
         for slug in comp_slugs[:5]:
             # Company posts
             ptext = await mcp.call_text("get_company_posts", {"company_name": slug})

@@ -5,14 +5,22 @@ Paginated job scraping without login using LinkedIn's hidden API.
 from __future__ import annotations
 
 import random
+import sys
 import time
 from datetime import datetime
 from typing import Any
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import requests
 from bs4 import BeautifulSoup
 
-from .config import (
+from config import (
     GUEST_API_BASE,
     GUEST_API_DELAY_MAX,
     GUEST_API_DELAY_MIN,
