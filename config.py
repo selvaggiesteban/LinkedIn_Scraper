@@ -8,16 +8,21 @@ import os
 from pathlib import Path
 
 # === PROJECT PATHS ===
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-OUTPUT_DIR = PROJECT_ROOT / "data" / "outputs" / "linkedin"
+PROJECT_ROOT = Path(__file__).resolve().parent
+OUTPUT_DIR = PROJECT_ROOT / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # === SEARCH CONFIGURATION ===
-LOCATION = "Buenos Aires, Argentina"
+LOCATIONS = [
+    "Buenos Aires, Argentina",
+    "Argentina",
+    "Latam",
+]
 TEMPORAL_FILTER = "r2592000"  # último mes
+EXPERIENCE_LEVEL = "5"  # Senior
 
 # Primary keywords = long-tail (what we search for)
-PRIMARY_KEYWORDS = ["web", "SEO", "wordpress", "full-stack", "full stack", "PHP"]
+PRIMARY_KEYWORDS = ["web", "SEO", "wordpress", "full-stack", "full stack", "PHP", "developer"]
 
 # Secondary keywords = employment context (validated in OCR text)
 SECONDARY_KEYWORDS = [

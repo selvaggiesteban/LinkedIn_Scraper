@@ -21,7 +21,7 @@ if sys.platform == "win32":
 
 from .config import (
     COMPANY_SEARCHES,
-    LOCATION,
+    LOCATIONS,
     PEOPLE_KEYWORDS,
     PRIMARY_KEYWORDS,
     OUTPUT_DIR,
@@ -55,7 +55,7 @@ async def run_all(
     """Main entry point: run all scraping methods in sequence."""
     print(f"\n{'#' * 60}")
     print(f"  LinkedIn Scraper v2 — {_ts()}")
-    print(f"  Location: {LOCATION}")
+    print(f"  Locations: {LOCATIONS}")
     print(f"  Keywords: {PRIMARY_KEYWORDS}")
     print(f"{'#' * 60}")
 
@@ -187,7 +187,7 @@ async def run_all(
     combined = {
         "metadata": {
             "timestamp": datetime.now().isoformat(),
-            "location": LOCATION,
+            "locations": LOCATIONS,
             "keywords": PRIMARY_KEYWORDS,
         },
         "results": deduped,

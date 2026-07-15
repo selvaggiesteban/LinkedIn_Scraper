@@ -18,7 +18,7 @@ from .config import (
     GUEST_API_DELAY_MIN,
     GUEST_API_MAX_START,
     GUEST_API_PAGE_SIZE,
-    LOCATION,
+    LOCATIONS,
     PRIMARY_KEYWORDS,
     TEMPORAL_FILTER,
     USER_AGENTS,
@@ -43,7 +43,7 @@ def _get_session() -> requests.Session:
 
 def fetch_jobs_page(
     keyword: str,
-    location: str = LOCATION,
+    location: str = "Buenos Aires, Argentina",
     start: int = 0,
     temporal: str = TEMPORAL_FILTER,
     session: requests.Session | None = None,
@@ -100,7 +100,7 @@ def fetch_jobs_page(
 
 def fetch_all_jobs(
     keyword: str,
-    location: str = LOCATION,
+    location: str = "Buenos Aires, Argentina",
     temporal: str = TEMPORAL_FILTER,
     session: requests.Session | None = None,
     proxies: dict | None = None,
@@ -142,36 +142,38 @@ def fetch_all_jobs(
 
 def scrape_all_keywords(
     keywords: list[str] | None = None,
-    location: str = LOCATION,
+    locations: list[str] | None = None,
     temporal: str = TEMPORAL_FILTER,
     proxies: dict | None = None,
 ) -> list[dict[str, Any]]:
-    """Scrape jobs for all primary keywords with pagination."""
+    """Scrape jobs for all primary keywords × locations with pagination."""
     kws = keywords or PRIMARY_KEYWORDS
+    locs = locations or LOCATIONS
     all_jobs: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
 
     print(f"\n{'=' * 60}")
-    print(f"[GUEST API] JOBS — {len(kws)} keywords × up to 1,000 each")
+    print(f"[GUEST API] JOBS — {len(kws)} keywords × {len(locs)} locations × up to 1,000 each")
     print(f"{'=' * 60}")
 
-    for i, kw in enumerate(kws, 1):
-        print(f"\n  [{i}/{len(kws)}] \"{kw}\" + \"{location}\"")
-        sess = _get_session()
-        jobs = fetch_all_jobs(
-            keyword=kw,
-            location=location,
-            temporal=temporal,
-            session=sess,
-            proxies=proxies,
-        )
-        new = 0
-        for job in jobs:
-            if job["job_url"] not in seen_urls:
-                seen_urls.add(job["job_url"])
-                all_jobs.append(job)
-                new += 1
-        print(f"  → {new} unique jobs from \"{kw}\" (total: {len(all_jobs)})")
+    for loc in locs:
+        for i, kw in enumerate(kws, 1):
+            print(f"\n  [{i}/{len(kws)}] \"{kw}\" + \"{loc}\"")
+            sess = _get_session()
+            jobs = fetch_all_jobs(
+                keyword=kw,
+                location=loc,
+                temporal=temporal,
+                session=sess,
+                proxies=proxies,
+            )
+            new = 0
+            for job in jobs:
+                if job["job_url"] not in seen_urls:
+                    seen_urls.add(job["job_url"])
+                    all_jobs.append(job)
+                    new += 1
+            print(f"  → {new} unique jobs from \"{kw}\" (total: {len(all_jobs)})")
 
     print(f"\n[GUEST API] TOTAL: {len(all_jobs)} unique jobs")
     return all_jobs
