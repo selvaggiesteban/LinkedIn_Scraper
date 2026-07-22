@@ -19,15 +19,14 @@ if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-# Add site-packages path for mcp (if needed on your environment)
-sys.path.insert(0, r'C:\Users\Esteban Selvaggi\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages')
+# (legacy site-packages path removed; install mcp via requirements.txt)
 
 from mcp.client.stdio import stdio_client
 from mcp import StdioServerParameters
 import mcp.types as types
 from mcp.shared.message import SessionMessage
 
-import linkedin_parser as lp
+from ..parsers import linkedin_parser as lp
 
 # ---------------------------------------------------------------------------
 # Config

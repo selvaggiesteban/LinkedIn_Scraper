@@ -9,7 +9,7 @@ import tempfile
 from datetime import datetime
 from typing import Any
 
-from .config import OCR_LANGUAGES, OUTPUT_DIR
+from ..config import OCR_LANGUAGES, OUTPUT_DIR
 
 
 class OCRExtractor:

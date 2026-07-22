@@ -19,9 +19,12 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SRC_DIR = os.path.join(_PROJECT_ROOT, "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
-from config import (
+from linkedin_scraper.config import (
     LOCATIONS, PRIMARY_KEYWORDS, PEOPLE_KEYWORDS, COMPANY_SEARCHES, OUTPUT_DIR,
 )
 
@@ -44,7 +47,7 @@ def _save_json(data: Any, name: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 def run_guest_api() -> list[dict]:
     print("\n[1/2] GUEST API")
-    from guest_api import scrape_all_keywords
+    from linkedin_scraper.sources.guest_api import scrape_all_keywords
     jobs = scrape_all_keywords()
     print(f"  -> {len(jobs)} unique jobs")
     return jobs
@@ -55,7 +58,7 @@ def run_guest_api() -> list[dict]:
 # ═══════════════════════════════════════════════════════════════
 async def run_mcp() -> dict[str, list]:
     print("\n[2/2] MCP")
-    from mcp_client import MCPClient, _parse_people_refs, _parse_post_refs, _parse_employee_refs
+    from linkedin_scraper.sources.mcp_client import MCPClient, _parse_people_refs, _parse_post_refs, _parse_employee_refs
 
     mcp = MCPClient()
     await mcp.connect()
@@ -144,7 +147,7 @@ async def run_mcp() -> dict[str, list]:
 # DEDUP
 # ═══════════════════════════════════════════════════════════════
 def dedup_all(data: dict) -> dict:
-    from deduplicator import dedup_urls
+    from linkedin_scraper.pipeline.deduplicator import dedup_urls
     result = {}
     for cat, items in data.items():
         result[cat] = dedup_urls(items) if items else []
@@ -158,7 +161,7 @@ def dedup_all(data: dict) -> dict:
 async def main():
     start = time.time()
     print(f"\n{'#' * 60}")
-    print(f"  LinkedIn Scraper v2 — FULL RUN")
+    print(f"  LinkedIn Scraper — FULL RUN")
     print(f"  Started: {_ts()}")
     print(f"  Keywords: {PRIMARY_KEYWORDS}")
     print(f"  Locations: {LOCATIONS}")

@@ -8,7 +8,7 @@ import re
 from difflib import SequenceMatcher
 from typing import Any
 
-from .config import NAME_FUZZY_THRESHOLD
+from ..config import NAME_FUZZY_THRESHOLD
 
 
 def _normalize_url(url: str) -> str:

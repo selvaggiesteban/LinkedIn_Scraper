@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .config import HASHTAGS, PRIMARY_KEYWORDS, SECONDARY_KEYWORDS
+from ..config import HASHTAGS, PRIMARY_KEYWORDS, SECONDARY_KEYWORDS
 
 
 def _normalize(text: str) -> str:

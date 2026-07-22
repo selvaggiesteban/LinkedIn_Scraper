@@ -1,5 +1,5 @@
 """
-ip_rotation.py — IP Rotation for LinkedIn Scraper v2
+ip_rotation.py — IP Rotation for LinkedIn Scraper
 Uses swiftshadow for free proxy rotation with Guest API requests.
 """
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """
-config.py — LinkedIn Scraper v2 Configuration
+config.py — LinkedIn Scraper Configuration
 All keywords, location, temporal filters, and scraping parameters.
 """
 from __future__ import annotations
@@ -8,7 +8,9 @@ import os
 from pathlib import Path
 
 # === PROJECT PATHS ===
-PROJECT_ROOT = Path(__file__).resolve().parent
+# config.py lives at src/linkedin_scraper/config.py — OUTPUT_DIR should be at repo root
+# .parent = src/linkedin_scraper/  →  .parent.parent = src/  →  .parent.parent.parent = repo root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -22,7 +24,11 @@ TEMPORAL_FILTER = "r2592000"  # último mes
 EXPERIENCE_LEVEL = "5"  # Senior
 
 # Primary keywords = long-tail (what we search for)
-PRIMARY_KEYWORDS = ["web", "SEO", "wordpress", "full-stack", "full stack", "PHP", "developer"]
+PRIMARY_KEYWORDS = [
+    "desarrollador",   # Argentina-first Spanish priority
+    "web",
+    "SEO", "wordpress", "full-stack", "full stack", "PHP", "developer",
+]
 
 # Secondary keywords = employment context (validated in OCR text)
 SECONDARY_KEYWORDS = [
@@ -79,6 +85,20 @@ USER_AGENTS = [
 # === MCP CONFIGURATION ===
 MCP_COMMAND = "mcp-server-linkedin"
 MCP_DELAY_BETWEEN_CALLS = 1.5
+# Caps to avoid LinkedIn rate-limiting on authenticated calls
+MCP_CAPS_JOB_DETAILS = 50       # top-N jobs to fetch full details for
+MCP_CAPS_PERSON_PROFILES = 30    # top-N people to fetch full profile for
+MCP_CAPS_COMPANY_PROFILES = 20   # top-N companies to fetch /about profile for
+
+# === GUEST API PUBLIC ENDPOINTS (no-login) ===
+GUEST_API_JOBS_VIEW_BASE = "https://www.linkedin.com/jobs/view/"
+GUEST_PUBLIC_PROFILE_BASE = "https://ar.linkedin.com/in/"
+GUEST_COMPANY_ABOUT_BASE = "https://www.linkedin.com/company/"
+
+# === SCRAPLING CAPS (against login walls) ===
+SCRAPLING_CAPS_JOBS = 30       # top-N job IDs to scrape via Scrapling
+SCRAPLING_CAPS_PROFILES = 20    # top-N usernames to scrape via Scrapling
+SCRAPLING_CAPS_COMPANIES = 10   # top-N company slugs to scrape via Scrapling
 
 # === PLAYWRIGHT CONFIGURATION ===
 PLAYWRIGHT_SCROLL_DELAY = 1.0
