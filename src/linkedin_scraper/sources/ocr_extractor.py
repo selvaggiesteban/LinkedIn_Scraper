@@ -56,8 +56,8 @@ class OCRExtractor:
 
         screenshot_path = ""
         try:
-            await playwright_page.goto(url, wait_until="networkidle", timeout=30000)
-            await playwright_page.wait_for_timeout(2000)
+            await playwright_page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            await playwright_page.wait_for_timeout(500)
 
             if save_screenshot:
                 screenshot_path = os.path.join(

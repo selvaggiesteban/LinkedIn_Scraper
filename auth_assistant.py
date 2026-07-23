@@ -128,7 +128,8 @@ def _open_login_interactive() -> bool:
 
     _log("Waiting for login to complete (timeout 180s)…")
     deadline = time.time() + 180
-    success_markers = ("login successful", "session saved", "ready to serve", "mcp server", "fastmcp")
+    # These markers must appear AFTER setup, not the banner itself
+    success_markers = ("successfully authenticated", "authenticated successfully", "logged in as", "session created")
     saw_marker = False
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -143,9 +144,11 @@ def _open_login_interactive() -> bool:
             if any(m in stripped for m in success_markers):
                 _log(f"  [login output] {line.strip()}")
                 saw_marker = True
-                # Give the server an extra few seconds to finalize session persistence
                 time.sleep(3)
                 break
+            # Ignore noisy banner lines
+            if "fastmcp" in stripped or "registering" in stripped or "info     starting" in stripped:
+                continue
         time.sleep(2)
 
     if not saw_marker and proc.poll() is None:
@@ -188,7 +191,7 @@ def _persist_status(status: str, mcp_version: str = "") -> None:
     _log(f"Status persisted → {STATUS_PATH}")
 
 
-async def _run() -> int:
+async def _run(manual_login: bool = False) -> int:
     _log("=" * 60)
     _log("LinkedIn Scraper — Auth Assistant")
     _log("=" * 60)
@@ -206,7 +209,21 @@ async def _run() -> int:
 
     _log("")
     _log("Step 2: Launch interactive login…")
-    if not _open_login_interactive():
+    if manual_login:
+        _log("Manual login mode — open a new terminal and run:")
+        _log('  uvx --from mcp-server-linkedin mcp-server-linkedin --login')
+        _log("Complete the LinkedIn login in the browser window that opens.")
+        _log("Then press Enter here to continue with verification…")
+        try:
+            input()
+        except EOFError:
+            _log("Non-interactive stdin — skipping login wait")
+            _persist_status("failed", "manual_login_incomplete")
+            return 1
+        ok = True
+    else:
+        ok = _open_login_interactive()
+    if not ok:
         _log("[FAIL] Login could not be completed")
         _persist_status("failed", "login_timeout")
         return 1
@@ -232,8 +249,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="LinkedIn Scraper — Auth Assistant")
     parser.add_argument("--non-interactive", action="store_true", help="CI mode (no prompts)")
     parser.add_argument("--interactive", action="store_true", help="Explicit interactive mode (default)")
+    parser.add_argument("--manual-login", action="store_true",
+                        help="Skip the auto-launched uvx --login (useful if you opened Chrome yourself)")
     args = parser.parse_args()
-    return asyncio.run(_run())
+    return asyncio.run(_run(manual_login=args.manual_login))
 
 
 if __name__ == "__main__":

@@ -39,12 +39,14 @@ from .config import (
     SCRAPLING_CAPS_JOBS,
     SCRAPLING_CAPS_PROFILES,
     SCRAPLING_CAPS_COMPANIES,
+    SCRAPLING_REQUEST_COOLDOWN,
 )
 from .sources.guest_api import scrape_all_keywords, scrape_public_complements
 from .sources.mcp_client import scrape_mcp
 from .sources.ocr_extractor import OCRExtractor
 from .pipeline.validator import validate_results
 from .pipeline.deduplicator import dedup_all
+from .utils.rate_budget import RateBudget, RateBudgetConfig
 
 
 def _ts() -> str:
@@ -65,13 +67,26 @@ async def run_all(
     use_scrapling: bool = True,
     use_ocr: bool = True,
     validate: bool = True,
+    cool_run: bool = False,
+    budget: RateBudget | None = None,
 ):
-    """Main entry point: run all scraping methods in sequence."""
+    """Main entry point: run all scraping methods in sequence.
+
+    A single ``budget`` is shared across MCP and Scrapling so LinkedIn's
+    anti-abuse window (~150 profiles/hr, ~5-8/min) isn't triggered, which
+    previously produced the ``actividad sospechosa en tu cuenta`` challenge
+    modal that suspended the operator's personal account. ``cool_run=True``
+    multiplies inter-call delays by 4.0 for the safest pace.
+    """
     print(f"\n{'#' * 60}")
     print(f"  LinkedIn Scraper — {_ts()}")
     print(f"  Locations: {LOCATIONS}")
     print(f"  Keywords: {PRIMARY_KEYWORDS}")
+    print(f"  cool_run={cool_run}  shared budget={budget is not None}")
     print(f"{'#' * 60}")
+
+    if budget is None:
+        budget = RateBudget(RateBudgetConfig(cool_run_multiplier=4.0 if cool_run else 1.0))
 
     all_raw: dict[str, list] = {
         "people": [], "jobs": [], "job_details": [],
@@ -109,7 +124,7 @@ async def run_all(
     mcp_cookies: dict[str, str] = {}
     if use_mcp:
         try:
-            mcp_results = await scrape_mcp(
+            mcp_results, mcp_cookies = await scrape_mcp(
                 people_keywords=PEOPLE_KEYWORDS,
                 company_searches=COMPANY_SEARCHES,
                 location=LOCATIONS[0],
@@ -117,19 +132,14 @@ async def run_all(
                 job_details_cap=MCP_CAPS_JOB_DETAILS,
                 person_profiles_cap=MCP_CAPS_PERSON_PROFILES,
                 company_profiles_cap=MCP_CAPS_COMPANY_PROFILES,
+                budget=budget,
+                cool_run=cool_run,
             )
             for cat in mcp_results:
                 all_raw.setdefault(cat, [])
                 all_raw[cat].extend(mcp_results[cat])
-            # Extract cookies from MCP session to share with Scrapling/Playwright
-            try:
-                from .sources.mcp_client import MCPClient
-                mc = MCPClient()
-                await mc.connect()
-                mcp_cookies = await mc.get_cookies()
-                await mc.close()
-            except Exception:
-                pass  # direct connection for Scrapling/Playwright
+            print(f"[DEBUG] mcp_results counts: { {k: len(v) for k, v in mcp_results.items()} }")
+            print(f"[DEBUG] mcp_cookies captured: {len(mcp_cookies)} cookies")
         except Exception as e:
             print(f"[ERROR] MCP failed: {e}")
 
@@ -137,12 +147,34 @@ async def run_all(
     if use_scrapling:
         try:
             from scrapling.fetchers import Fetcher
+            import random as _rand
+            import asyncio as _aio
             print(f"\n{'=' * 60}")
-            print("[SCRAPLING] FULL COVERAGE (jobs + people + companies + posts)")
+            print("[SCRAPLING] FULL COVERAGE (jobs + people + companies + posts) — stealthy")
             print(f"{'=' * 60}")
+
+            async def _sl_fetch(url: str, *, weight: float = 1.0, timeout: int = 15) -> Any | None:
+                """Paced Scrapling GET with stealthy headers + budget gating."""
+                await budget.acquire(weight=weight, cool_run=cool_run)
+                try:
+                    return Fetcher.get(
+                        url, timeout=timeout,
+                        cookies=mcp_cookies or None,
+                        stealthy_headers=True,
+                    )
+                except Exception as e:
+                    print(f"      [scrapling err] {type(e).__name__}")
+                    budget.record_error(weight=1.0)
+                    return None
+
+            async def _sl_cooldown(base: float = float(SCRAPLING_REQUEST_COOLDOWN)) -> None:
+                jitter = base + _rand.uniform(-0.5, 1.0)
+                await budget.pause_for(jitter * (4.0 if cool_run else 1.0),
+                                       reason="scrapling-between-urls")
+
             # 3a. Company /about (public + login cookie when available)
             print("  Company /about pages:")
-            seen_slugs = set()
+            seen_slugs: set[str] = set()
             for comp in list(all_raw["company_search"])[:SCRAPLING_CAPS_COMPANIES]:
                 url = comp.get("url", "")
                 slug = url.rstrip("/").split("/")[-1] if url else comp.get("external_id", "")
@@ -150,70 +182,67 @@ async def run_all(
                     continue
                 seen_slugs.add(slug)
                 about_url = f"https://www.linkedin.com/company/{slug}/about"
-                try:
-                    page = Fetcher.fetch(about_url, timeout=15, cookies=mcp_cookies or None)
-                    if page.status == 200:
-                        text = page.get_all_text() if hasattr(page, "get_all_text") else ""
-                        all_raw["company_profiles"].append({
-                            "type": "company_profile",
-                            "source": "scrapling",
-                            "name": comp.get("name", slug),
-                            "external_id": slug,
-                            "url": about_url,
-                            "text_ocr": text,
-                            "scraped_at": datetime.now().isoformat(),
-                        })
-                        print(f"    ✓ {slug}")
-                except Exception as e:
-                    print(f"    ✗ {slug}: {type(e).__name__}")
+                page = await _sl_fetch(about_url)
+                if page is not None and getattr(page, "status", 0) == 200:
+                    text = page.get_all_text() if hasattr(page, "get_all_text") else ""
+                    all_raw["company_profiles"].append({
+                        "type": "company_profile",
+                        "source": "scrapling",
+                        "name": comp.get("name", slug),
+                        "external_id": slug,
+                        "url": about_url,
+                        "text_ocr": text,
+                        "scraped_at": datetime.now().isoformat(),
+                    })
+                    print(f"    + {slug}")
+                await _sl_cooldown()
+
             # 3b. Company /posts
             print("  Company /posts pages:")
             for slug in list(seen_slugs)[:5]:
                 posts_url = f"https://www.linkedin.com/company/{slug}/posts"
-                try:
-                    page = Fetcher.fetch(posts_url, timeout=15, cookies=mcp_cookies or None)
-                    if page.status == 200:
-                        text = page.get_all_text() if hasattr(page, "get_all_text") else ""
-                        all_raw["posts_companies"].append({
-                            "type": "post_company",
-                            "source": "scrapling",
-                            "company_name": slug,
-                            "external_id": slug,
-                            "url": posts_url,
-                            "text_ocr": text,
-                            "scraped_at": datetime.now().isoformat(),
-                        })
-                        print(f"    ✓ {slug}")
-                except Exception as e:
-                    print(f"    ✗ {slug}: {type(e).__name__}")
+                page = await _sl_fetch(posts_url)
+                if page is not None and getattr(page, "status", 0) == 200:
+                    text = page.get_all_text() if hasattr(page, "get_all_text") else ""
+                    all_raw["posts_companies"].append({
+                        "type": "post_company",
+                        "source": "scrapling",
+                        "company_name": slug,
+                        "external_id": slug,
+                        "url": posts_url,
+                        "text_ocr": text,
+                        "scraped_at": datetime.now().isoformat(),
+                    })
+                    print(f"    + {slug}")
+                await _sl_cooldown()
+
             # 3c. Job detail pages (public)
             print(f"  Job detail pages (top {SCRAPLING_CAPS_JOBS}):")
-            seen_job_ids = set()
+            seen_job_ids: set[str] = set()
             for job in list(all_raw["jobs"])[:SCRAPLING_CAPS_JOBS]:
                 url = job.get("url") or job.get("job_url") or job.get("applyUrl", "")
-                jid = job.get("external_id", "") or url.rstrip("/").split("/")[-1] if url else ""
+                jid = job.get("external_id", "") or (url.rstrip("/").split("/")[-1] if url else "")
                 if not url or jid in seen_job_ids:
                     continue
                 seen_job_ids.add(jid)
-                try:
-                    page = Fetcher.fetch(url, timeout=15, cookies=mcp_cookies or None)
-                    if page.status == 200:
-                        text = page.get_all_text() if hasattr(page, "get_all_text") else ""
-                        all_raw["job_details"].append({
-                            "type": "job_detail",
-                            "source": "scrapling",
-                            "title": job.get("title", ""),
-                            "external_id": jid,
-                            "url": url,
-                            "text_ocr": text,
-                            "scraped_at": datetime.now().isoformat(),
-                        })
-                        print(f"    ✓ {jid}")
-                except Exception as e:
-                    print(f"    ✗ {jid}: {type(e).__name__}")
+                page = await _sl_fetch(url)
+                if page is not None and getattr(page, "status", 0) == 200:
+                    text = page.get_all_text() if hasattr(page, "get_all_text") else ""
+                    all_raw["job_details"].append({
+                        "type": "job_detail",
+                        "source": "scrapling",
+                        "title": job.get("title", ""),
+                        "external_id": jid,
+                        "url": url,
+                        "text_ocr": text,
+                        "scraped_at": datetime.now().isoformat(),
+                    })
+                    print(f"    + {jid}")
+                await _sl_cooldown()
+
             # 3d. Person profiles (public /in/<username>/)
             print(f"  Person profiles (top {SCRAPLING_CAPS_PROFILES}):")
-            seen_usernames = set()
+            seen_usernames: set[str] = set()
             for person in list(all_raw["people"])[:SCRAPLING_CAPS_PROFILES]:
                 url = person.get("url") or person.get("profile_url", "")
                 if not url:
@@ -222,22 +251,20 @@ async def run_all(
                 if not username or username in seen_usernames:
                     continue
                 seen_usernames.add(username)
-                try:
-                    page = Fetcher.fetch(url, timeout=15, cookies=mcp_cookies or None)
-                    if page.status == 200:
-                        text = page.get_all_text() if hasattr(page, "get_all_text") else ""
-                        all_raw["person_profiles"].append({
-                            "type": "person_profile",
-                            "source": "scrapling",
-                            "name": person.get("name", ""),
-                            "external_id": username,
-                            "url": url,
-                            "text_ocr": text,
-                            "scraped_at": datetime.now().isoformat(),
-                        })
-                        print(f"    ✓ {username}")
-                except Exception as e:
-                    print(f"    ✗ {username}: {type(e).__name__}")
+                page = await _sl_fetch(url)
+                if page is not None and getattr(page, "status", 0) == 200:
+                    text = page.get_all_text() if hasattr(page, "get_all_text") else ""
+                    all_raw["person_profiles"].append({
+                        "type": "person_profile",
+                        "source": "scrapling",
+                        "name": person.get("name", ""),
+                        "external_id": username,
+                        "url": url,
+                        "text_ocr": text,
+                        "scraped_at": datetime.now().isoformat(),
+                    })
+                    print(f"    + {username}")
+                await _sl_cooldown()
         except ImportError:
             print("[SCRAPLING] Not installed, skipping full coverage Vía 3")
         except Exception as e:
@@ -259,36 +286,58 @@ async def run_all(
                 from playwright.async_api import async_playwright
                 async with async_playwright() as p:
                     browser = await p.chromium.launch(headless=True)
-                    context = await browser.new_context()
-                    if mcp_cookies:
-                        await context.add_cookies([
-                            {"name": k, "value": v, "domain": ".linkedin.com", "path": "/"}
-                            for k, v in mcp_cookies.items()
-                        ])
-                    page = await context.new_page()
-                    ocr_cap_per_cat = 20  # cap per category to avoid overrun
-                    total_enriched = 0
-                    for cat in ocr_categories:
-                        items = all_raw.get(cat, [])[:ocr_cap_per_cat]
-                        if not items:
-                            continue
-                        print(f"  {cat}: {len(items)} items to OCR")
-                        cat_enriched = 0
-                        for item in items:
-                            url = item.get("url") or item.get("job_url") or item.get("profile_url") or item.get("post_url") or ""
-                            if not url:
+                    try:
+                        context = await browser.new_context()
+                        if mcp_cookies:
+                            try:
+                                await context.add_cookies([
+                                    {"name": k, "value": v, "domain": ".linkedin.com", "path": "/"}
+                                    for k, v in mcp_cookies.items()
+                                ])
+                            except Exception as e:
+                                print(f"  [WARN] Cookie injection failed: {type(e).__name__}")
+                        page = await context.new_page()
+                        ocr_cap_per_cat = 10
+                        total_enriched = 0
+                        for cat in ocr_categories:
+                            items = all_raw.get(cat, [])[:ocr_cap_per_cat]
+                            if not items:
                                 continue
-                            result = await ocr.extract_from_url(url, page)
-                            item["text_ocr"] = result.get("text", "")
-                            if result.get("screenshot"):
-                                item["screenshot"] = result["screenshot"]
-                            cat_enriched += 1
-                        total_enriched += cat_enriched
-                        print(f"    → enriched {cat_enriched}")
-                    await browser.close()
-                    print(f"  OCR total enriched: {total_enriched} items")
-            except Exception as e:
-                print(f"  [ERROR] Playwright OCR failed: {e}")
+                            print(f"  {cat}: {len(items)} items to OCR")
+                            cat_enriched = 0
+                            for item in items:
+                                url = item.get("url") or item.get("job_url") or item.get("profile_url") or item.get("post_url") or ""
+                                if not url:
+                                    continue
+                                try:
+                                    import asyncio as _asyncio
+                                    result = await _asyncio.wait_for(
+                                        ocr.extract_from_url(url, page),
+                                        timeout=20,
+                                    )
+                                    item["text_ocr"] = result.get("text", "")
+                                    if result.get("screenshot"):
+                                        item["screenshot"] = result["screenshot"]
+                                    cat_enriched += 1
+                                except _asyncio.TimeoutError:
+                                    print(f"    [WARN] OCR timeout on {url[:60]}")
+                                    continue
+                                except Exception as e:
+                                    print(f"    [WARN] OCR single failure on {url[:60]}: {type(e).__name__}")
+                                    continue
+                            total_enriched += cat_enriched
+                            print(f"    → enriched {cat_enriched}")
+                        print(f"  OCR total enriched: {total_enriched} items")
+                    finally:
+                        try:
+                            await browser.close()
+                        except Exception:
+                            pass
+            except (asyncio.CancelledError, Exception) as e:
+                if isinstance(e, asyncio.CancelledError):
+                    print(f"  [WARN] Playwright OCR cancelled — continuing without OCR")
+                else:
+                    print(f"  [ERROR] Playwright OCR failed: {e}")
 
     # ── 5. DEDUP ──
     print(f"\n{'=' * 60}")
@@ -335,6 +384,8 @@ async def run_all(
             "timestamp": datetime.now().isoformat(),
             "locations": LOCATIONS,
             "keywords": PRIMARY_KEYWORDS,
+            "cool_run": cool_run,
+            "safety": budget.stats(),
         },
         "results": deduped,
     }
@@ -375,6 +426,8 @@ def main():
     parser.add_argument("--no-scrapling", action="store_true", help="Skip Scrapling")
     parser.add_argument("--no-ocr", action="store_true", help="Skip OCR")
     parser.add_argument("--no-validate", action="store_true", help="Skip validation")
+    parser.add_argument("--cool-run", action="store_true",
+                        help="Safe pace: multiply inter-call delays by 4x (slowest, lowest ban risk)")
     args = parser.parse_args()
 
     asyncio.run(run_all(
@@ -384,6 +437,7 @@ def main():
         use_scrapling=not args.no_scrapling,
         use_ocr=not args.no_ocr,
         validate=not args.no_validate,
+        cool_run=args.cool_run,
     ))
 
 

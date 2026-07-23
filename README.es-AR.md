@@ -257,23 +257,89 @@ Cada item, sin importar la fuente, sigue el schema unificado:
 | Riesgo | Probabilidad | Impacto | Mitigación |
 |---|---|---|---|
 | IP bloqueada por Guest API | Media | Perder Vía 1 entera | Rotación de proxies (`USE_SWIFTSHADOW=True`); retardos aleatorios 0.5-1.5 s entre páginas |
-| LinkedIn detecta la sesión MCP como automatización | Baja | Sesión cancelada | `MCP_DELAY_BETWEEN_CALLS=1.5s`; topes 50/30/20 |
-| Ban temporal de cuenta (forzado 2FA) | Baja | Sin auth 24 h | Correr máx 1-2 veces por día |
-| Cloudflare bloquea Scrapling | Media | Perder Vía 3 | Usar `StealthyFetcher` con backoff exponencial |
+| LinkedIn detecta la sesión MCP como automatización (`actividad sospechosa en tu cuenta`) | Media → **Baja** con RateBudget | Sesión cancelada; cuenta suspendida temporalmente | RateBudget de doble cubeta (8/min + 100/h) + 8 fases MCP escalonadas + recuperación de `MCPChallengePendingError` (45 s × 2 reintentos) |
+| Ban temporal de cuenta (forzado 2FA) | Baja | Sin auth 24 h | Correr máx 1-2 veces por día; `--cool-run` multiplica los delays entre llamadas × 4 |
+| Cloudflare bloquea Scrapling | Media | Perder Vía 3 | `stealthy_headers=True` en cada `Fetcher.get` (v3); cool-downs gateados por el budget entre URLs |
 | CAPTCHA en Playwright | Baja | Vía 4 se saltea | `headless=False` para resolver a mano; o saltear OCR y usar el texto del `deduplicator` |
+| Challenge screen durante la corrida MCP (cookies vencidas) | Media | El bucket vuelve vacío | `_safe_call` devuelve `None` graceful → bucket preservado pero vacío; re-corre `auth_assistant.py` |
 
 ## 🛡️ Métodos Anti-Bloqueo
 
-1. **Rotación de User-Agent** — pool de 8 UAs (`config.py:68-77`)
-2. **Rotación de proxies** — `swiftshadow` (gratis) o Webshare/ScrapeOps (pago)
+### Nivel 1 — Fundacionales (siempre activos)
+1. **Rotación de User-Agent** — pool de 8 UAs (`config.py:USER_AGENTS`)
+2. **Rotación de proxies** — `swiftshadow` (gratis) o Webshare/ScrapeOps (pago) para Guest API
 3. **Retardos aleatorios** — `random.uniform(0.5, 1.5)` entre fetches del Guest API
-4. **Delay entre llamadas MCP** — `MCP_DELAY_BETWEEN_CALLS = 1.5s`
-5. **Topes de enriquecimiento MCP** — 50 job_details, 30 person_profiles, 20 company_profiles por corrida
-6. **Topes de Scrapling** — 30 IDs de empleos, 20 usernames, 10 slugs de empresas por corrida
-7. **Caché de OCR** — directorio `.ocr_cache/` evita re-screenshot de las mismas URLs entre corridas
-8. **Impersonación de fingerprint TLS** — `scrapling.StealthyFetcher` esquiva Cloudflare Turnstile
-9. **Reutilización de cookies** — Vía 3 y Vía 4 reciben las cookies de la sesión MCP, evitando inicios de sesión adicionales
-10. **Rotación de sesión** — re-inicio de sesión cada ~30 días (caducidad de cookies de LinkedIn)
+4. **Impersonación de fingerprint TLS** — `scrapling.Fetcher(stealthy_headers=True)` esquiva Cloudflare Turnstile
+5. **Caché de OCR** — directorio `.ocr_cache/` evita re-screenshot de las mismas URLs entre corridas
+6. **Reutilización de cookies** — Vía 3 y Vía 4 reciben las cookies de la sesión MCP, evitando inicios de sesión adicionales
+7. **Rotación de sesión** — re-inicio de sesión cada ~30 días (caducidad de cookies de LinkedIn)
+
+### Nivel 2 — Pacing con RateBudget (nuevo en v3.0)
+El orquestador ahora comparte **una sola instancia de `RateBudget`** entre MCP y Scrapling para
+mantener la tasa acumulada de llamadas por debajo de la ventana anti-abuso de LinkedIn
+(~150 perfiles/h, ~5-8/min en ráfagas). Los knobs de tuning viven en
+`src/linkedin_scraper/utils/rate_budget.py` + `config.py`:
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `RateBudgetConfig.burst_capacity` | **8/min** | Techo duro de llamadas por ventana móvil de 60 s |
+| `RateBudgetConfig.hourly_capacity` | **100/h** | Techo duro de llamadas acumuladas por ventana de 3600 s |
+| `RateBudgetConfig.error_penalty` | **4 tokens** | Cada error de LinkedIn quema 4 tokens de ráfaga → fuerza cool-down más largo |
+| `RateBudgetConfig.cool_run_multiplier` | **4.0** | Si activás `--cool-run`, todos los delay entre llamadas × 4 (más lento = menor riesgo de ban) |
+| `MCP_CAPS_JOB_DETAILS` | **20** | Top-N empleos a enriquecer con `get_job_details` por corrida |
+| `MCP_CAPS_PERSON_PROFILES` | **15** | Top-N personas a enriquecer con `get_person_profile` |
+| `MCP_CAPS_COMPANY_PROFILES` | **8** | Top-N empresas a enriquecer con `get_company_profile` |
+| `SCRAPLING_CAPS_*` | 30/20/10 | Techos por corrida para fetches de URLs con Scrapling |
+| `SCRAPLING_REQUEST_COOLDOWN` | **3.5 s** | Sleep paced entre fetches de Scrapling (jitter ±0.5–1.0 s) |
+
+### Nivel 3 — 8 fases MCP escalonadas (`scrape_mcp`)
+Cada fase es gate-gated por `_safe_call` que adquiere un token del budget, llama al tool MCP,
+captura `MCPChallengePendingError` (→ espera 45 s, máx 2 reintentos) y registra error penalties:
+
+| Fase | Tool(s) | Delay entre llamadas | Cool-down |
+|---|---|---|---|
+| A | `search_jobs` × 8 keywords | `jitter(3,5)` s | — |
+| B | `search_people` × 23 keywords (lotes de 4) | `jitter(4,6)` s | **60 s** entre lotes |
+| C | `get_feed` (×1) | después de 20 s de cool-down | 30 s antes de D |
+| D | `search_companies` × 4 keywords | `jitter(4,6)` s | — |
+| E | `get_company_posts` + `get_company_employees` (top 3 slugs/búsqueda) | `jitter(5,7)` s | **30 s** por slug |
+| F | `get_job_details` × N | `jitter(3,5)` s | — |
+| G | `get_person_profile` × N | `jitter(4,6)` s | — |
+| H | `get_company_profile` × N | `jitter(5,7)` s | — |
+
+### Nivel 4 — Degradación graceful
+- **`MCPChallengePendingError`** → 45 s de espera, máx 2 reintentos, después devuelve `None`. El
+  bucket se preserva pero vacío (garantiza que las 10 categorías estén presentes en el Excel aun
+  con fallas parciales).
+- **Errores de Scrapling** → registrados con `budget.record_error()`, sin crash, sólo devuelve `None`.
+- **Playwright OCR** envuelto en `try/finally` con `browser.close()` — nunca fuga un proceso de
+  Chromium ni siquiera con `asyncio.CancelledError`.
+- **`mcp.close()`** envuelto en `try/except` para tragar el inofensivo `RuntimeError: cancel scope`
+  que levanta anyio en el teardown.
+
+### Telemetría
+Después de cada corrida, `output/all_results_<ts>.json` ahora incluye un bloque `metadata.safety`:
+
+```json
+{
+  "metadata": {
+    "cool_run": false,
+    "safety": {
+      "total_calls": 87,
+      "total_errors": 2,
+      "total_pauses": 14,
+      "burst_tokens_left": 3.2,
+      "hourly_tokens_left": 73.8,
+      "calls_per_minute_peak": 6.4,
+      "burst_capacity": 8,
+      "hourly_capacity": 100
+    }
+  }
+}
+```
+
+Usá estos números para tunear `RateBudgetConfig` entre corridas (p.ej. si `total_errors` > 5 o
+`calls_per_minute_peak` > 7 → bajá los caps o corré siempre con `--cool-run`).
 
 ## Recomendaciones de Uso
 

@@ -86,9 +86,10 @@ USER_AGENTS = [
 MCP_COMMAND = "mcp-server-linkedin"
 MCP_DELAY_BETWEEN_CALLS = 1.5
 # Caps to avoid LinkedIn rate-limiting on authenticated calls
-MCP_CAPS_JOB_DETAILS = 50       # top-N jobs to fetch full details for
-MCP_CAPS_PERSON_PROFILES = 30    # top-N people to fetch full profile for
-MCP_CAPS_COMPANY_PROFILES = 20   # top-N companies to fetch /about profile for
+# (defaults reduced from 50/30/20 to 20/15/8 because get_company_profile is slow)
+MCP_CAPS_JOB_DETAILS = 20       # top-N jobs to fetch full details for
+MCP_CAPS_PERSON_PROFILES = 15    # top-N people to fetch full profile for
+MCP_CAPS_COMPANY_PROFILES = 8    # top-N companies to fetch /about profile for
 
 # === GUEST API PUBLIC ENDPOINTS (no-login) ===
 GUEST_API_JOBS_VIEW_BASE = "https://www.linkedin.com/jobs/view/"
@@ -99,6 +100,8 @@ GUEST_COMPANY_ABOUT_BASE = "https://www.linkedin.com/company/"
 SCRAPLING_CAPS_JOBS = 30       # top-N job IDs to scrape via Scrapling
 SCRAPLING_CAPS_PROFILES = 20    # top-N usernames to scrape via Scrapling
 SCRAPLING_CAPS_COMPANIES = 10   # top-N company slugs to scrape via Scrapling
+# Seconds between Scrapling fetches (scaled by cool_run_multiplier at runtime)
+SCRAPLING_REQUEST_COOLDOWN = 3.5
 
 # === PLAYWRIGHT CONFIGURATION ===
 PLAYWRIGHT_SCROLL_DELAY = 1.0
