@@ -32,14 +32,17 @@ The 4 scraping methods ("vías") cover **all 10 LinkedIn search categories** at 
 
 ## Features
 
-- 🚀 **4 scraping methods** working in concert: Guest API (no-login), MCP server (auth), Scrapling (anti-bot), OCR (text enrichment)
-- 🎯 **10 categories** with full coverage (jobs, job_details, people, person_profiles, posts_feed, posts_companies, company_search, company_profiles, company_employees, authors)
-- 🛡️ **Anti-ban measures**: 8-UA rotation, optional proxy rotation (swiftshadow free / Webshare paid), randomized delays 0.5-1.5s, MCP call caps
-- ✅ **Employment-intent validation**: primary keyword AND (secondary keyword OR hashtag) must appear in text
-- 🧹 **Cross-source deduplication**: URL dedup + fuzzy name matching (`difflib.SequenceMatcher`)
-- 📊 **Unified Excel export**: 1 workbook / 11 sheets (1 README + 10 categories) + flat CSV fallback
-- 🔐 **One-time interactive auth assistant** (`python auth_assistant.py` or `./setup.ps1`)
-- 🌐 **Bilingual README** (English + español argentino variant)
+- **4 scraping methods** working in concert: Guest API (no-login), MCP server (auth), Scrapling (anti-bot), OCR (text enrichment)
+- **10 categories** with full coverage (jobs, job_details, people, person_profiles, posts_feed, posts_companies, company_search, company_profiles, company_employees, authors)
+- **Anti-ban measures**: 8-UA rotation, optional proxy rotation (swiftshadow free / Webshare paid), randomized delays, MCP call caps, adaptive RateBudget
+- **Employment-intent validation**: primary keyword AND (secondary keyword OR hashtag) must appear in text
+- **Cross-source deduplication**: URL dedup + fuzzy name matching (`difflib.SequenceMatcher`)
+- **Unified Excel export**: 1 workbook / 11 sheets (1 README + 10 categories) + flat CSV fallback
+- **Subprocess isolation**: optional crash-safe MCP calls via `mcp_subprocess.py`
+- **Save-before-close**: checkpoint protection against MCP teardown crashes
+- **Data consolidation**: `tools/consolidate_data.py` merges all historical runs into 1 JSON + 1 CSV + 1 Excel
+- **One-time interactive auth assistant** (`python tools/auth_assistant.py` or `./setup.ps1`)
+- **Bilingual README** (English + espanol argentino variant)
 
 ## Quick Start
 
@@ -50,7 +53,7 @@ playwright install chromium
 uv tool install mcp-server-linkedin
 
 # 2. One-time login (interactive)
-python auth_assistant.py
+python tools/auth_assistant.py
 # or on Windows:
 ./setup.ps1
 
@@ -61,6 +64,12 @@ python linkedin_scraper.py
 #    - LinkedIn_Scraper_<ts>.xlsx   (Excel with 11 sheets)
 #    - LinkedIn_Scraper_<ts>.csv    (flat CSV, all categories)
 #    - all_results_<ts>.json       (raw JSON with stats)
+
+# 5. Consolidate historical data (optional)
+python tools/consolidate_data.py
+#    -> data/outputs/consolidated/linkedin_all_jobs.json
+#    -> data/outputs/consolidated/linkedin_all_jobs.csv
+#    -> data/outputs/consolidated/linkedin_all_jobs.xlsx
 ```
 
 ## Authentication Guide
@@ -355,28 +364,51 @@ Use this to tune `RateBudgetConfig` between runs (e.g. if `total_errors` > 5 or
 ```
 LinkedIn_Scraper/
 ├── .gitignore
-├── README.md                          ← this file (English)
-├── README.es-AR.md                    ← español argentino
+├── README.md                              <- this file (English)
+├── README.es-AR.md                        <- espanol argentino
 ├── requirements.txt
-├── pyproject.toml                     (Phase 5)
-├── setup.ps1                           ← Windows launcher for auth_assistant
-├── auth_assistant.py                  ← one-time interactive auth
-├── excel_exporter.py                  ← XLSX + CSV exporter
-├── linkedin_scraper.py                ← orchestrator (entry point)
-├── linkedin_tools.py                   ← interactive CLI (search/view/connect/message)
-├── config.py                          ← single source of truth
-├── guest_api.py                       ← Vía 1 (no-login)
-├── mcp_client.py                      ← Vía 2 (auth)
-├── ocr_extractor.py                   ← Vía 4 (enricher)
-├── ip_rotation.py                     ← proxy rotation
-├── deduplicator.py                    ← URL + fuzzy name dedup
-├── validator.py                       ← employment-intent validation
-├── linkedin_parser.py                 ← MCP response parser
-├── output/                            ← deliverables (gitignored)
-│   ├── all_results_<ts>.json
-│   ├── LinkedIn_Scraper_<ts>.xlsx
-│   └── LinkedIn_Scraper_<ts>.csv
-└── data/outputs/historical/           ← preserved historical runs
+├── pyproject.toml
+├── setup.ps1                              <- Windows launcher for auth_assistant
+├── linkedin_scraper.py                    <- CLI entry point (wraps orchestrator)
+├── src/linkedin_scraper/                  <- MAIN PACKAGE
+│   ├── __init__.py
+│   ├── config.py                          <- single source of truth
+│   ├── orchestrator.py                    <- 4-via pipeline orchestrator
+│   ├── cli/
+│   │   └── linkedin_tools.py              <- interactive CLI (search/view/connect/message)
+│   ├── parsers/
+│   │   └── linkedin_parser.py             <- MCP response parser
+│   ├── pipeline/
+│   │   ├── deduplicator.py                <- URL + fuzzy name dedup
+│   │   └── validator.py                   <- employment-intent validation
+│   ├── sources/
+│   │   ├── guest_api.py                   <- Via 1 (no-login)
+│   │   ├── mcp_client.py                  <- Via 2 (auth, 8-phase pipeline)
+│   │   ├── mcp_subprocess.py              <- Via 2 fallback (subprocess isolation)
+│   │   └── ocr_extractor.py               <- Via 4 (enricher)
+│   └── utils/
+│       ├── excel_exporter.py              <- XLSX + CSV exporter
+│       ├── ip_rotation.py                 <- proxy rotation
+│       └── rate_budget.py                 <- adaptive rate limiting
+├── tools/                                 <- standalone scripts
+│   ├── auth_assistant.py                  <- one-time interactive auth
+│   ├── analyze_jobs.py                    <- ad-hoc job analysis
+│   └── consolidate_data.py                <- merge all historical data
+├── tests/
+│   ├── conftest.py
+│   └── test_mcp_single.py
+├── output/                                <- deliverables (gitignored)
+│   └── .gitkeep
+├── data/outputs/
+│   ├── historical/                        <- preserved raw run data
+│   │   ├── jobs_20260715.json
+│   │   └── linkedin_jobs_mcp_historical.json
+│   └── consolidated/                      <- generated by consolidate_data.py
+│       ├── linkedin_all_jobs.json
+│       ├── linkedin_all_jobs.csv
+│       └── linkedin_all_jobs.xlsx
+└── scripts/
+    └── run_all.py                         <- legacy simplified runner (deprecated)
 ```
 
 ## Dependencies

@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from typing import Any
 
@@ -87,6 +88,8 @@ async def run_all(
 
     if budget is None:
         budget = RateBudget(RateBudgetConfig(cool_run_multiplier=4.0 if cool_run else 1.0))
+
+    start = time.time()
 
     all_raw: dict[str, list] = {
         "people": [], "jobs": [], "job_details": [],
@@ -385,6 +388,7 @@ async def run_all(
             "locations": LOCATIONS,
             "keywords": PRIMARY_KEYWORDS,
             "cool_run": cool_run,
+            "duration_s": round(time.time() - start),
             "safety": budget.stats(),
         },
         "results": deduped,
@@ -394,7 +398,7 @@ async def run_all(
 
     # ── 8. EXPORT EXCEL + CSV ──
     try:
-        from excel_exporter import export_all
+        from .utils.excel_exporter import export_all
         xlsx_path, csv_path = export_all(combined["results"], OUTPUT_DIR)
         if xlsx_path:
             print(f"  XLSX → {xlsx_path}")

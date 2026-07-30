@@ -73,6 +73,7 @@ def fetch_jobs_page(
         return []
 
     soup = BeautifulSoup(resp.text, "html.parser")
+    content_len = len(resp.text)
     jobs = []
     for li in soup.select("li"):
         card = li.select_one("div.base-search-card")
@@ -103,6 +104,8 @@ def fetch_jobs_page(
                 "job_url": url,
                 "scraped_at": datetime.now().isoformat(),
             })
+    if not jobs:
+        print(f"    [Guest API] start={start} status={resp.status_code} content_len={content_len} jobs=0")
     return jobs
 
 

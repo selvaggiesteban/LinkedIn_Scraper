@@ -91,6 +91,17 @@ MCP_CAPS_JOB_DETAILS = 20       # top-N jobs to fetch full details for
 MCP_CAPS_PERSON_PROFILES = 15    # top-N people to fetch full profile for
 MCP_CAPS_COMPANY_PROFILES = 8    # top-N companies to fetch /about profile for
 
+# Per-tool timeouts (seconds) — tuned to each MCP tool's typical latency
+MCP_TIMEOUT_SEARCH_JOBS = 45
+MCP_TIMEOUT_SEARCH_PEOPLE = 30
+MCP_TIMEOUT_GET_FEED = 30
+MCP_TIMEOUT_SEARCH_COMPANIES = 30
+MCP_TIMEOUT_GET_COMPANY_POSTS = 30
+MCP_TIMEOUT_GET_COMPANY_EMPLOYEES = 20
+MCP_TIMEOUT_GET_JOB_DETAILS = 30
+MCP_TIMEOUT_GET_PERSON_PROFILE = 30
+MCP_TIMEOUT_GET_COMPANY_PROFILE = 30
+
 # === GUEST API PUBLIC ENDPOINTS (no-login) ===
 GUEST_API_JOBS_VIEW_BASE = "https://www.linkedin.com/jobs/view/"
 GUEST_PUBLIC_PROFILE_BASE = "https://ar.linkedin.com/in/"

@@ -30,18 +30,21 @@ Las 4 vías de scraping cubren **las 10 categorías de búsqueda de LinkedIn** a
 
 **Cobertura combinada:** las 10 categorías tienen 1-4 fuentes productoras para deduplicación cruzada entre fuentes.
 
-## Características
+## Caracteristicas
 
-- 🚀 **4 métodos de scraping** trabajando en conjunto: Guest API (sin inicio de sesión), MCP server (autenticado), Scrapling (anti-bot), OCR (enriquecimiento de texto)
-- 🎯 **10 categorías** con cobertura total (jobs, job_details, people, person_profiles, posts_feed, posts_companies, company_search, company_profiles, company_employees, authors)
-- 🛡️ **Medidas anti-bloqueo**: rotación de 8 User-Agents, rotación opcional de proxies (swiftshadow gratis / Webshare pago), retardos aleatorios de 0.5-1.5 s, topes en llamadas MCP
-- ✅ **Validación de intención de empleo**: debe aparecer palabra clave primaria Y (palabra clave secundaria O hashtag) en el texto
-- 🧹 **Deduplicación cruzada entre fuentes**: por URL + coincidencia difusa de nombres (`difflib.SequenceMatcher`)
-- 📊 **Exportación unificada a Excel**: 1 libro / 11 hojas (1 README + 10 categorías) + CSV plano como alternativa
-- 🔐 **Asistente de autenticación interactivo** una sola vez (`python auth_assistant.py` o `./setup.ps1`)
-- 🌐 **README bilingüe** (inglés + español argentino)
+- **4 metodos de scraping** trabajando en conjunto: Guest API (sin inicio de sesion), MCP server (autenticado), Scrapling (anti-bot), OCR (enriquecimiento de texto)
+- **10 categorias** con cobertura total (jobs, job_details, people, person_profiles, posts_feed, posts_companies, company_search, company_profiles, company_employees, authors)
+- **Medidas anti-bloqueo**: rotacion de 8 User-Agents, rotacion opcional de proxies (swiftshadow gratis / Webshare pago), retardos aleatorios, topes en llamadas MCP, RateBudget adaptativo
+- **Validacion de intencion de empleo**: debe aparecer palabra clave primaria Y (palabra clave secundaria O hashtag) en el texto
+- **Deduplicacion cruzada entre fuentes**: por URL + coincidencia difusa de nombres (`difflib.SequenceMatcher`)
+- **Exportacion unificada a Excel**: 1 libro / 11 hojas (1 README + 10 categorias) + CSV plano como alternativa
+- **Aislamiento por subprocess**: llamadas MCP seguras via `mcp_subprocess.py` (proteccion contra crashes)
+- **Save-before-close**: checkpoint de proteccion contra crashes en el teardown de MCP
+- **Consolidacion de datos**: `tools/consolidate_data.py` fusiona todas las ejecuciones historicas en 1 JSON + 1 CSV + 1 Excel
+- **Asistente de autenticacion interactivo** una sola vez (`python tools/auth_assistant.py` o `./setup.ps1`)
+- **README bilingue** (ingles + espanol argentino)
 
-## Inicio Rápido
+## Inicio Rapido
 
 ```bash
 # 1. Instalar dependencias
@@ -49,18 +52,24 @@ pip install -r requirements.txt
 playwright install chromium
 uv tool install mcp-server-linkedin
 
-# 2. Inicio de sesión por única vez (interactivo)
-python auth_assistant.py
+# 2. Inicio de sesion por unica vez (interactivo)
+python tools/auth_assistant.py
 # o en Windows:
 ./setup.ps1
 
-# 3. Correr el scraper (las 4 vías, cobertura total)
+# 3. Correr el scraper (las 4 vias, cobertura total)
 python linkedin_scraper.py
 
 # 4. Entregables en output/
 #    - LinkedIn_Scraper_<ts>.xlsx   (Excel con 11 hojas)
-#    - LinkedIn_Scraper_<ts>.csv    (CSV plano, todas las categorías)
-#    - all_results_<ts>.json        (JSON crudo con estadísticas)
+#    - LinkedIn_Scraper_<ts>.csv    (CSV plano, todas las categorias)
+#    - all_results_<ts>.json        (JSON crudo con estadisticas)
+
+# 5. Consolidar datos historicos (opcional)
+python tools/consolidate_data.py
+#    -> data/outputs/consolidated/linkedin_all_jobs.json
+#    -> data/outputs/consolidated/linkedin_all_jobs.csv
+#    -> data/outputs/consolidated/linkedin_all_jobs.xlsx
 ```
 
 ## Guía de Autenticación
@@ -356,28 +365,51 @@ Usá estos números para tunear `RateBudgetConfig` entre corridas (p.ej. si `tot
 ```
 LinkedIn_Scraper/
 ├── .gitignore
-├── README.md                          ← versión inglés
-├── README.es-AR.md                    ← este archivo (español argentino)
+├── README.md                              <- version ingles
+├── README.es-AR.md                        <- este archivo (espanol argentino)
 ├── requirements.txt
-├── pyproject.toml                     (Fase 5)
-├── setup.ps1                          ← launcher Windows para auth_assistant
-├── auth_assistant.py                  ← inicio de sesión interactivo una vez
-├── excel_exporter.py                  ← exportador XLSX + CSV
-├── linkedin_scraper.py                ← orquestador (entry point)
-├── linkedin_tools.py                   ← CLI interactivo (search/view/connect/message)
-├── config.py                          ← única fuente de verdad
-├── guest_api.py                       ← Vía 1 (sin inicio de sesión)
-├── mcp_client.py                      ← Vía 2 (autenticado)
-├── ocr_extractor.py                   ← Vía 4 (enriquecedor)
-├── ip_rotation.py                     ← rotación de proxy
-├── deduplicator.py                    ← dedup por URL + fuzzy name
-├── validator.py                       ← validación de intención de empleo
-├── linkedin_parser.py                 ← parser de respuesta MCP
-├── output/                            ← entregables (gitignored)
-│   ├── all_results_<ts>.json
-│   ├── LinkedIn_Scraper_<ts>.xlsx
-│   └── LinkedIn_Scraper_<ts>.csv
-└── data/outputs/historical/           ← corridas históricas preservadas
+├── pyproject.toml
+├── setup.ps1                              <- launcher Windows para auth_assistant
+├── linkedin_scraper.py                    <- punto de entrada CLI (wraps orchestrator)
+├── src/linkedin_scraper/                  <- PAQUETE PRINCIPAL
+│   ├── __init__.py
+│   ├── config.py                          <- unica fuente de verdad
+│   ├── orchestrator.py                    <- orquestador de las 4 vias
+│   ├── cli/
+│   │   └── linkedin_tools.py              <- CLI interactivo (search/view/connect/message)
+│   ├── parsers/
+│   │   └── linkedin_parser.py             <- parser de respuestas MCP
+│   ├── pipeline/
+│   │   ├── deduplicator.py                <- dedup por URL + fuzzy name
+│   │   └── validator.py                   <- validacion de intencion de empleo
+│   ├── sources/
+│   │   ├── guest_api.py                   <- Via 1 (sin inicio de sesion)
+│   │   ├── mcp_client.py                  <- Via 2 (autenticado, pipeline 8 fases)
+│   │   ├── mcp_subprocess.py              <- Via 2 fallback (aislamiento por subprocess)
+│   │   └── ocr_extractor.py               <- Via 4 (enriquecedor)
+│   └── utils/
+│       ├── excel_exporter.py              <- exportador XLSX + CSV
+│       ├── ip_rotation.py                 <- rotacion de proxy
+│       └── rate_budget.py                 <- rate limiting adaptativo
+├── tools/                                 <- scripts independientes
+│   ├── auth_assistant.py                  <- inicio de sesion interactivo una vez
+│   ├── analyze_jobs.py                    <- analisis ad-hoc de empleos
+│   └── consolidate_data.py                <- fusion de todos los datos historicos
+├── tests/
+│   ├── conftest.py
+│   └── test_mcp_single.py
+├── output/                                <- entregables (gitignored)
+│   └── .gitkeep
+├── data/outputs/
+│   ├── historical/                        <- datos crudos preservados
+│   │   ├── jobs_20260715.json
+│   │   └── linkedin_jobs_mcp_historical.json
+│   └── consolidated/                      <- generado por consolidate_data.py
+│       ├── linkedin_all_jobs.json
+│       ├── linkedin_all_jobs.csv
+│       └── linkedin_all_jobs.xlsx
+└── scripts/
+    └── run_all.py                         <- runner simplificado legacy (deprecated)
 ```
 
 ## Dependencias

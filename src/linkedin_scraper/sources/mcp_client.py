@@ -16,6 +16,17 @@ from datetime import datetime
 from typing import Any
 
 from ..utils.rate_budget import RateBudget, RateBudgetConfig
+from ..config import (
+    MCP_TIMEOUT_SEARCH_JOBS,
+    MCP_TIMEOUT_SEARCH_PEOPLE,
+    MCP_TIMEOUT_GET_FEED,
+    MCP_TIMEOUT_SEARCH_COMPANIES,
+    MCP_TIMEOUT_GET_COMPANY_POSTS,
+    MCP_TIMEOUT_GET_COMPANY_EMPLOYEES,
+    MCP_TIMEOUT_GET_JOB_DETAILS,
+    MCP_TIMEOUT_GET_PERSON_PROFILE,
+    MCP_TIMEOUT_GET_COMPANY_PROFILE,
+)
 
 
 # ── typed errors so callers can distinguish transient vs. fatal ──────────────
@@ -365,6 +376,36 @@ def _parse_authors_from_text(text: str, source: str = "mcp") -> list[dict[str, A
     return authors
 
 
+def _parse_author_refs(data: dict, source: str = "mcp") -> list[dict[str, Any]]:
+    """Structured extraction of author profile URLs from MCP references.
+
+    Primary method — more reliable than text regex since it uses the
+    structured ``kind == "person"`` filter from the MCP JSON response.
+    """
+    results = []
+    refs = (
+        data.get("references", {}).get("search_results", [])
+        or data.get("references", {}).get("feed", [])
+    )
+    for ref in refs:
+        if ref.get("kind") != "person":
+            continue
+        url = ref.get("url", "")
+        if not url or "/in/" not in url:
+            continue
+        full_url = f"https://www.linkedin.com{url}" if url.startswith("/") else url
+        username = full_url.rstrip("/").split("/in/")[-1]
+        results.append({
+            "type": "author",
+            "source": source,
+            "name": ref.get("text", ""),
+            "url": full_url.split("?")[0],
+            "external_id": username,
+            "scraped_at": datetime.now().isoformat(),
+        })
+    return results
+
+
 def _normalize_person(p: dict[str, Any]) -> dict[str, Any]:
     """Ensure every person dict has a `url` field for dedup compatibility."""
     url = p.get("profile_url") or p.get("url", "")
@@ -488,7 +529,7 @@ async def scrape_mcp(
                     "sort_by": "date", "work_type": "remote,on_site"}
             if location:
                 args["location"] = location
-            data = await _safe_call("search_jobs", args, timeout=45, weight=1.0)
+            data = await _safe_call("search_jobs", args, timeout=MCP_TIMEOUT_SEARCH_JOBS, weight=1.0)
             if not data:
                 print("    -> 0")
                 await asyncio.sleep(_jitter(3.0, 5.0))
@@ -525,6 +566,7 @@ async def scrape_mcp(
             data = await _safe_call(
                 "search_people",
                 {"keywords": kw, "location": location},
+                timeout=MCP_TIMEOUT_SEARCH_PEOPLE,
                 weight=1.0,
             )
             if data:
@@ -555,19 +597,24 @@ async def scrape_mcp(
     # ── Fase C — feed (single call, low cardinality) ─────────────────────
     print(f"\n[MCP/Fase C] FEED (after Fase B cool-down)")
     await budget.pause_for(20.0, reason="pre-feed cool-down")
-    data = await _safe_call("get_feed", {"num_posts": 50}, timeout=30, weight=1.0)
+    data = await _safe_call("get_feed", {"num_posts": 50}, timeout=MCP_TIMEOUT_GET_FEED, weight=1.0)
     if data:
         posts = _parse_post_refs(data, "feed")
         results["posts_feed"] = [_normalize_post(p) for p in posts]
         print(f"  -> {len(posts)} posts")
+        # Primary: structured reference extraction (more reliable)
+        seen_author_urls = {x.get("url") for x in results["authors"]}
+        for a in _parse_author_refs(data, "mcp"):
+            if a["url"] not in seen_author_urls:
+                results["authors"].append(a)
+                seen_author_urls.add(a["url"])
+        # Fallback: regex from post text (catches authors not in references)
         for p in posts:
             text = (p.get("title", "") or "") + " " + (p.get("text", "") or "")
-            urls = re.findall(r'https?://(?:www\.)?linkedin\.com/in/[A-Za-z0-9_-]+/?', text)
-            for au in urls:
-                authors = _parse_authors_from_text(au, "mcp")
-                for a in authors:
-                    if a["url"] not in {x.get("url") for x in results["authors"]}:
-                        results["authors"].append(a)
+            for a in _parse_authors_from_text(text, "mcp"):
+                if a["url"] not in seen_author_urls:
+                    results["authors"].append(a)
+                    seen_author_urls.add(a["url"])
     await asyncio.sleep(_jitter(8.0, 12.0))
 
     # ── Fase D — search_companies (full coverage) ───────────────────────
@@ -576,7 +623,7 @@ async def scrape_mcp(
     for i, ck in enumerate(company_searches, 1):
         print(f"  [{i}/{len(company_searches)}] {ck}")
         cdata = await _safe_call(
-            "search_companies", {"keywords": ck}, timeout=30, weight=1.0,
+            "search_companies", {"keywords": ck}, timeout=MCP_TIMEOUT_SEARCH_COMPANIES, weight=1.0,
         )
         if not cdata:
             print("    -> 0 companies")
@@ -617,7 +664,7 @@ async def scrape_mcp(
         for j, slug in enumerate(top_slugs, 1):
             # Company posts
             pdata = await _safe_call(
-                "get_company_posts", {"company_name": slug}, timeout=30, weight=1.0,
+                "get_company_posts", {"company_name": slug}, timeout=MCP_TIMEOUT_GET_COMPANY_POSTS, weight=1.0,
             )
             ptext = ""
             if pdata:
@@ -640,13 +687,22 @@ async def scrape_mcp(
                         "scraped_at": datetime.now().isoformat(),
                     }))
                 print(f"    [{j}/{len(top_slugs)}] {slug}: {len(unique_urls)} posts")
+                # Primary: structured reference extraction
+                seen_author_urls = {x.get("url") for x in results["authors"]}
+                if pdata:
+                    for au in _parse_author_refs(pdata, "mcp_company"):
+                        if au["url"] not in seen_author_urls:
+                            results["authors"].append(au)
+                            seen_author_urls.add(au["url"])
+                # Fallback: regex from text
                 for au in _parse_authors_from_text(ptext, "mcp_company"):
-                    if au["url"] not in {x.get("url") for x in results["authors"]}:
+                    if au["url"] not in seen_author_urls:
                         results["authors"].append(au)
+                        seen_author_urls.add(au["url"])
 
             # Company employees
             edata = await _safe_call(
-                "get_company_employees", {"company_name": slug}, timeout=30, weight=1.0,
+                "get_company_employees", {"company_name": slug}, timeout=MCP_TIMEOUT_GET_COMPANY_EMPLOYEES, weight=1.0,
             )
             if edata:
                 employees = _parse_employee_refs(edata, slug)
@@ -673,7 +729,7 @@ async def scrape_mcp(
                 continue
             print(f"  [{i}/{job_details_cap}] job_id={job_id}")
             detail_data = await _safe_call(
-                "get_job_details", {"job_id": job_id}, timeout=30, weight=1.0,
+                "get_job_details", {"job_id": job_id}, timeout=MCP_TIMEOUT_GET_JOB_DETAILS, weight=1.0,
             )
             if detail_data:
                 detail = _parse_job_details(detail_data, job_id)
@@ -697,7 +753,7 @@ async def scrape_mcp(
             print(f"  [{i}/{person_profiles_cap}] username={username}")
             pdata = await _safe_call(
                 "get_person_profile", {"linkedin_username": username},
-                timeout=30, weight=1.0,
+                timeout=MCP_TIMEOUT_GET_PERSON_PROFILE, weight=1.0,
             )
             if pdata:
                 profile = _parse_person_profile(pdata, username)
@@ -718,7 +774,7 @@ async def scrape_mcp(
             seen_slugs.add(slug)
             print(f"  [{i}/{len(candidates)}] slug={slug}")
             cpdata = await _safe_call(
-                "get_company_profile", {"company_name": slug}, timeout=30, weight=1.0,
+                "get_company_profile", {"company_name": slug}, timeout=MCP_TIMEOUT_GET_COMPANY_PROFILE, weight=1.0,
             )
             if cpdata:
                 profile = _parse_company_profile(cpdata, slug)
@@ -727,6 +783,17 @@ async def scrape_mcp(
             await asyncio.sleep(_jitter(5.0, 7.0))
 
     cookies: dict[str, str] = {}
+    # Save-before-close checkpoint: if mcp.close() crashes (e.g. Unicode
+    # encoding error), results are already persisted to a temp file.
+    _checkpoint_path = None
+    try:
+        import tempfile, pathlib
+        _checkpoint_dir = pathlib.Path(tempfile.gettempdir())
+        _checkpoint_path = _checkpoint_dir / "linkedin_mcp_checkpoint.json"
+        with open(_checkpoint_path, "w", encoding="utf-8") as _cf:
+            json.dump(results, _cf, ensure_ascii=False, default=str)
+    except Exception:
+        _checkpoint_path = None
     try:
         # Capture cookies before closing — share with Scrapling/Playwright
         try:
@@ -736,6 +803,12 @@ async def scrape_mcp(
         await mcp.close()
     except Exception:
         pass  # asyncio cancel scope mismatch is harmless at exit
+    # Clean up checkpoint on successful close
+    if _checkpoint_path and _checkpoint_path.exists():
+        try:
+            _checkpoint_path.unlink()
+        except Exception:
+            pass
 
     total = sum(len(v) for v in results.values())
     stats = budget.stats()
